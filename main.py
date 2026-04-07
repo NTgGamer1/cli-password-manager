@@ -6,30 +6,23 @@ import utils.encryption as enc
 
 def setup_master_password():
     """
-    Guides the user through setting up their master password for the first time.
+    Automatically sets the default master password on the first run.
+    Users are highly encouraged to change this in the options menu.
     
     Inputs: None
     Outputs:
         bytes: The derived encryption key ready to be passed around.
     """
     print("\n=== Welcome to your new CLI Password Manager! ===")
-    print("It looks like this is your first time here.")
+    print("Initializing your secure vault for the first time...")
     
-    while True:
-        # getpass hides the typed characters so shoulder-surfers can't see the password!
-        pwd = getpass.getpass("Create a Master Password: ")
-        confirm = getpass.getpass("Confirm Master Password: ")
-        
-        if pwd == confirm:
-            print("Encrypting and saving your master password...")
-            auth.hash_and_save_master_password(pwd)
-            print("Setup Complete! Do not forget this. There is NO recovery option.")
-            break
-        else:
-            print("Passwords do not match. Let's try again.\n")
+    default_pwd = "mysecret"
+    auth.hash_and_save_master_password(default_pwd)
+    
+    print(f"\n[!] Setup Complete. Your default Master Password is: '{default_pwd}'")
+    print("[!] Please use Option 5 in the menu to change it immediately for your security.\n")
             
-    # We return the encryption key derived from this master password so the session can begin!
-    return enc.derive_key_from_password(pwd)
+    return enc.derive_key_from_password(default_pwd)
 
 def login():
     """
@@ -62,7 +55,8 @@ def display_menu():
     print("2. View all saved passwords")
     print("3. Edit a password")
     print("4. Delete a password")
-    print("5. Exit")
+    print("5. Change Master Password")
+    print("6. Exit")
     print("-----------------")
 
 def main():
@@ -84,7 +78,7 @@ def main():
     # 3. Enter the main infinite loop of our CLI application.
     while True:
         display_menu()
-        choice = input("Select an option (1-5): ").strip()
+        choice = input("Select an option (1-6): ").strip()
         
         if choice == '1':
             service = input("Enter the service (e.g., Google, Netflix): ").strip()
@@ -150,11 +144,56 @@ def main():
             print("SUCCESS: Password deleted.")
             
         elif choice == '5':
+            print("\n--- Change Master Password ---")
+            print("WARNING: This will re-encrypt your entire vault.")
+            old_pwd = getpass.getpass("Enter CURRENT Master Password: ")
+            
+            if not auth.verify_master_password(old_pwd):
+                print("Incorrect current password. Aborting.")
+                continue
+                
+            new_pwd = getpass.getpass("Enter NEW Master Password: ")
+            confirm = getpass.getpass("Confirm NEW Master Password: ")
+            
+            if new_pwd != confirm:
+                print("Passwords do not match. Aborting.")
+                continue
+                
+            print("Processing... Please do not close the application.")
+            
+            # Step A: Generate the new encryption key
+            new_session_key = enc.derive_key_from_password(new_pwd)
+            
+            # Step B: Pull ALL passwords and re-encrypt them
+            rows = db.get_all_passwords()
+            success = True
+            for r in rows:
+                p_id, service, username, old_encrypted_hash, _ = r
+                try:
+                    # Decrypt with OLD key
+                    decrypted_pwd = enc.decrypt_password(session_key, old_encrypted_hash)
+                    # Encrypt with NEW key
+                    new_encrypted_hash = enc.encrypt_password(new_session_key, decrypted_pwd)
+                    # Update DB
+                    db.update_password(p_id, service, username, new_encrypted_hash)
+                except Exception as e:
+                    print(f"ERROR re-encrypting entry {p_id}. Aborting process!")
+                    success = False
+                    break
+                    
+            if success:
+                # Step C: Save new master password hash
+                auth.hash_and_save_master_password(new_pwd)
+                # Step D: Update live session key
+                session_key = new_session_key
+                print("SUCCESS: Master password changed and all vault entries re-encrypted.")
+                
+        elif choice == '6':
             print("Exiting Password Manager. Stay safe!")
             break
             
         else:
-            print("Invalid selection. Please enter a number from 1 to 5.")
+            print("Invalid selection. Please enter a number from 1 to 6.")
 
 # A Python convention meaning: "Only run the main() function if this core file is executed directly." 
 if __name__ == "__main__":
